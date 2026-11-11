@@ -1,35 +1,51 @@
-# AI Review Agent 测试项目
+# 轻量订单服务
 
 ## 背景与目标
 
-使用无第三方依赖的 Python 订单服务测试 GitHub PR 自动审查。建议 Python 3.10 及以上版本。
+一个可在本地运行的订单后端，支持商品查询、订单创建、优惠券和取消订单。使用 Python 3.10+ 标准库与 SQLite，无第三方依赖，适合演示小型服务的业务流程与代码审查。
 
 ## 总体设计
 
-`order.py` 提供金额计算、订单权限校验和独立请求配置；数据保存在内存中。`test_order.py` 提供最小回归测试，无需数据库或网络服务。
+- `shop/database.py`：连接、表结构、演示商品初始化。
+- `shop/service.py`：参数校验、金额计算、权限控制和事务。
+- `shop/api.py`：HTTP 路由、JSON 输入和统一响应。
+- `tests/test_orders.py`：核心业务回归测试。
 
-## 核心接口与流程
+金额使用整数分；订单保存购买时单价，避免商品价格变化影响历史订单。创建和取消订单使用 SQLite 写事务，确保库存与订单一起提交或回滚。
 
-- `calculate_total(unit_price, quantity, discount_percent=0)`：校验单价、数量、折扣，返回折后金额，非法值抛出 ValueError。
-- `get_order(order_id, current_user_id)`：查询订单并校验所有者，返回副本；不存在返回 None，越权抛出 PermissionError。
-- `build_options(currency=None)`：返回独立配置，默认币种为 CNY。
+## 核心流程
 
-## 审查样例
+创建订单时校验明细，合并重复商品，检查库存，计算优惠后金额，再保存订单和扣减库存。查询仅返回当前用户订单。取消订单返还库存，重复取消不重复返还。
 
-每个分支均直接基于 main，创建 PR 时以 main 为目标分支：
+## 数据设计
 
-| 分支 | 预期识别的问题 |
-| --- | --- |
-| codex/review-discount | 折扣计算方向错误，折扣反而增加金额 |
-| codex/review-authorization | 缺少所有者校验，可读取其他用户订单 |
-| codex/review-shared-state | 直接修改默认字典，导致后续请求受到污染 |
+商品保存名称、价格、库存；订单保存用户、状态、原价、实付金额和创建时间；订单明细保存商品、数量与成交单价。必需字段均在数据库约束或业务入口校验。优惠券为可选参数，当前支持 SAVE10 九折优惠。
 
-这些问题是故意注入的测试样例，不应合并到 main。要进行盲测，可不向 Agent 提供本说明。
+## 接口设计
 
-## 最小验证
+| 方法 | 路径 | 含义 |
+| --- | --- | --- |
+| GET | /products | 查询商品列表 |
+| POST | /orders | 创建订单，JSON 包含 items 和可选 coupon |
+| GET | /orders/{id} | 查询当前用户订单 |
+| POST | /orders/{id}/cancel | 取消当前用户订单 |
 
-在任意分支执行 `python -m unittest -v`。main 预期全部通过，各样例分支预期各有一个相关测试失败。
+订单接口通过 `X-User-Id` 演示用户上下文。该请求头不具备身份认证能力，仅适用于可信本地测试；生产使用前需要接入真正的身份认证。
 
-## 后续迭代
+## 运行与验证
 
-先验证 Agent 能否定位三个独立问题，再按需增加跨文件调用和复杂业务场景。
+运行 `python -m shop.api`，监听本机 8000 端口，首次启动自动创建 shop.db 和商品数据。可设置 SHOP_DATABASE 环境变量更换数据库位置。
+
+创建订单请求体示例：
+
+```json
+{"items": [{"product_id": 1, "quantity": 2}], "coupon": "SAVE10"}
+```
+
+请求头包含 `Content-Type: application/json` 和 `X-User-Id: 10`。
+
+最小测试命令：`python -m unittest discover -s tests -v`。
+
+## 迭代计划与边界
+
+当前完成订单最小闭环。后续可接入认证、支付和迁移工具；不涉及实际支付或物流。HTTP 接口仅用于本地演示，不直接用于公开部署。
